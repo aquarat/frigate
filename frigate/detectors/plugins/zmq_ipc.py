@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from typing import Any, List
 
 import numpy as np
@@ -89,6 +90,8 @@ class ZmqIpcDetector(DetectionApi):
 
         # Preallocate zero result for error paths
         self._zero_result = np.zeros((20, 6), np.float32)
+        self._retry_interval_s = 10.0
+        self._last_init_attempt = time.monotonic()
 
     def _create_socket(self) -> None:
         if self._socket is not None:
@@ -300,8 +303,19 @@ class ZmqIpcDetector(DetectionApi):
 
     def detect_raw(self, tensor_input: np.ndarray) -> np.ndarray:
         if not self._model_ready:
-            logger.warning("Model not ready, returning zero detections")
-            return self._zero_result
+            # Upstream gives up for good if
+            # the detector process was not reachable when Frigate started.
+            # Retry the model handshake at most every _retry_interval_s so a
+            # detector that comes up later (e.g. after a reboot race with the
+            # systemd unit) is picked up without restarting Frigate.
+            now = time.monotonic()
+            if now - self._last_init_attempt >= self._retry_interval_s:
+                self._last_init_attempt = now
+                logger.warning("Model not ready; retrying detector handshake")
+                self._create_socket()
+                self._initialize_model()
+            if not self._model_ready:
+                return self._zero_result
 
         try:
             header_bytes = self._build_header(tensor_input)
