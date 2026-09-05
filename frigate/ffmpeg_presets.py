@@ -8,6 +8,8 @@ from typing import Any, Optional
 from frigate.const import (
     FFMPEG_HVC1_ARGS,
     FFMPEG_HWACCEL_AMF,
+    FFMPEG_HWACCEL_APPLE_AVD,
+    FFMPEG_HWACCEL_APPLE_AVD_VULKAN,
     FFMPEG_HWACCEL_NVIDIA,
     FFMPEG_HWACCEL_RKMPP,
     FFMPEG_HWACCEL_VAAPI,
@@ -94,6 +96,13 @@ PRESETS_HW_ACCEL_DECODE = {
     # experimental presets
     FFMPEG_HWACCEL_VULKAN: "-hwaccel vulkan -init_hw_device vulkan=gpu:0 -filter_hw_device gpu -hwaccel_output_format vulkan",
     FFMPEG_HWACCEL_AMF: "-hwaccel amf -init_hw_device amf=gpu:0 -filter_hw_device gpu -hwaccel_output_format amf",
+    # Apple silicon (Asahi Linux): the AVD stateless decoder through the V4L2 Request API.
+    # preset-apple-avd reads the decoded frames back to system memory and scales with swscale;
+    # preset-apple-avd-vulkan keeps them in the decoder's dma-bufs, maps them into Vulkan
+    # (Honeykrisp) and scales on the GPU. Both need an ffmpeg with the v4l2request hwaccel
+    # (and Vulkan + scale_vulkan for the latter); see docs/configuration/hardware_acceleration_video.md.
+    FFMPEG_HWACCEL_APPLE_AVD: "-hwaccel v4l2request",
+    FFMPEG_HWACCEL_APPLE_AVD_VULKAN: "-init_hw_device vulkan=vk -filter_hw_device vk -hwaccel v4l2request -hwaccel_output_format drm_prime",
 }
 PRESETS_HW_ACCEL_DECODE["preset-nvidia-h264"] = PRESETS_HW_ACCEL_DECODE[
     FFMPEG_HWACCEL_NVIDIA
@@ -131,6 +140,12 @@ PRESETS_HW_ACCEL_SCALE = {
     # experimental presets
     FFMPEG_HWACCEL_VULKAN: "-r {0} -vf fps={0},hwupload,scale_vulkan=w={1}:h={2},hwdownload",
     FFMPEG_HWACCEL_AMF: "-r {0} -vf fps={0},hwupload,scale_amf=w={1}:h={2},hwdownload",
+    FFMPEG_HWACCEL_APPLE_AVD: "-r {0} -vf fps={0},scale={1}:{2}",
+    # fps first so only the frames that are kept get mapped; scale_vulkan is bilinear, so halve the
+    # frame first (exact at 2x) and then scale to the detect size, which keeps luma at ~31 dB PSNR
+    # vs swscale's bicubic instead of ~25 dB for a single 3.6x step; small sources (iw/2 < w)
+    # degenerate to a single step. scale_vulkan keeps NV12, so download as nv12 and convert.
+    FFMPEG_HWACCEL_APPLE_AVD_VULKAN: "-r {0} -vf fps={0},hwmap,scale_vulkan=w=max(iw/2\\,{1}):h=max(ih/2\\,{2}),scale_vulkan=w={1}:h={2},hwdownload,format=nv12,format=yuv420p",
 }
 PRESETS_HW_ACCEL_SCALE["preset-nvidia-h264"] = PRESETS_HW_ACCEL_SCALE[
     FFMPEG_HWACCEL_NVIDIA
